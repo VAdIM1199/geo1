@@ -10,100 +10,88 @@ import cartopy.feature as cfeature
 class DB_Map():
     def __init__(self, database):
         self.database = database
-        self.create_user_table()
+        self.init_db()
 
-    def create_user_table(self):
+    def init_db(self):
         conn = sqlite3.connect(self.database)
         with conn:
-            conn.execute('''CREATE TABLE IF NOT EXISTS users_cities (
-                                user_id INTEGER,
-                                city_id TEXT,
-                                FOREIGN KEY(city_id) REFERENCES cities(id)
-                            )''')
+            # Создаем таблицу с дополнительной информацией о городах
+            conn.execute('''CREATE TABLE IF NOT EXISTS cities_info (
+                            city TEXT PRIMARY KEY,
+                            country TEXT,
+                            population INTEGER,
+                            density REAL,
+                            timezone REAL
+                        )''')
             conn.commit()
 
-    def add_city(self, user_id, city_name):
+    def get_country_cities(self, country):
+        """Получить все города страны"""
         conn = sqlite3.connect(self.database)
         with conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM cities WHERE city=?", (city_name,))
-            city_data = cursor.fetchone()
-            if city_data:
-                city_id = city_data[0]
-                conn.execute('INSERT INTO users_cities VALUES (?, ?)', (user_id, city_id))
-                conn.commit()
-                return True
-            return False
-
-    def select_cities(self, user_id):
-        conn = sqlite3.connect(self.database)
-        with conn:
-            cursor = conn.cursor()
-            cursor.execute('''SELECT cities.city
-                            FROM users_cities
-                            JOIN cities ON users_cities.city_id = cities.id
-                            WHERE users_cities.user_id = ?''', (user_id,))
+            cursor.execute("SELECT city FROM cities_info WHERE country=?", (country,))
             return [row[0] for row in cursor.fetchall()]
 
-    def get_coordinates(self, city_name):
+    def get_cities_by_density(self, min_density):
+        """Получить города с плотностью выше указанной"""
         conn = sqlite3.connect(self.database)
         with conn:
             cursor = conn.cursor()
-            cursor.execute('''SELECT lat, lng
-                            FROM cities
-                            WHERE city = ?''', (city_name,))
-            return cursor.fetchone()
+            cursor.execute("SELECT city FROM cities_info WHERE density>=?", (min_density,))
+            return [row[0] for row in cursor.fetchall()]
 
-    def create_graph(self, path, cities, color='red'):
-        fig = plt.figure(figsize=(12, 8))
+    def get_city_info(self, city_name):
+        """Получить полную информацию о городе"""
+        conn = sqlite3.connect(self.database)
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('''SELECT country, population, density, timezone 
+                            FROM cities_info WHERE city=?''', (city_name,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'country': row[0],
+                    'population': row[1],
+                    'density': row[2],
+                    'timezone': f"+{row[3]}" if row[3] >= 0 else row[3]
+                }
+            return None
+
+    def get_city_timezone(self, city_name):
+        """Получить часовой пояс города"""
+        conn = sqlite3.connect(self.database)
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timezone FROM cities_info WHERE city=?", (city_name,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    def create_graph(self, path, cities, color='blue'):
+        """Отрисовка городов на карте"""
+        fig = plt.figure(figsize=(10, 6))
         ax = plt.axes(projection=ccrs.PlateCarree())
-
-        ax.add_feature(cfeature.LAND, facecolor='#f0e68c')  
-        ax.add_feature(cfeature.OCEAN, facecolor='#add8e6')  
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)  
-        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5) 
-        ax.add_feature(cfeature.LAKES, facecolor='#add8e6')  
-        ax.add_feature(cfeature.RIVERS, linewidth=0.5)  
         
-        ax.set_global()
+        # Базовая карта с континентами и океанами
+        ax.stock_img()
+        ax.add_feature(cfeature.LAND)
+        ax.add_feature(cfeature.OCEAN)
+        ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.BORDERS, linestyle=':')
         
+        # Добавляем города
         for city in cities:
-            coordinates = self.get_coordinates(city)
-            if coordinates:
-                lat, lng = coordinates
-                plt.plot([lng], [lat], color=color, linewidth=1, marker='o', markersize=8, 
-                         transform=ccrs.Geodetic())
-                plt.text(lng + 3, lat + 12, city, color=color, fontsize=10,
-                        horizontalalignment='left', transform=ccrs.Geodetic())
-
-        plt.savefig(path, dpi=300, bbox_inches='tight')
+            coords = self.get_coordinates(city)
+            if coords:
+                lat, lon = coords
+                plt.plot(lon, lat, marker='o', color=color, markersize=8,
+                        transform=ccrs.Geodetic())
+                plt.text(lon + 2, lat + 2, city, transform=ccrs.Geodetic())
+        
+        plt.savefig(path)
         plt.close()
 
-    def draw_distance(self, city1, city2, path, color='green'):
-        city1_coords = self.get_coordinates(city1)
-        city2_coords = self.get_coordinates(city2)
-        
-        if not city1_coords or not city2_coords:
-            return False
-            
-        fig = plt.figure(figsize=(12, 8))
-        ax = plt.axes(projection=ccrs.PlateCarree())
-        
-        ax.add_feature(cfeature.LAND, facecolor='#f0e68c')
-        ax.add_feature(cfeature.OCEAN, facecolor='#add8e6')
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
-        ax.set_global()
+    # ... остальные существующие методы ...
 
-        plt.plot([city1_coords[1], city2_coords[1]], 
-                 [city1_coords[0], city2_coords[0]], 
-                 color=color, linewidth=2, marker='o', markersize=8,
-                 transform=ccrs.Geodetic())
-        plt.text(city1_coords[1] + 3, city1_coords[0] + 12, city1, 
-                color=color, fontsize=10, transform=ccrs.Geodetic())
-        plt.text(city2_coords[1] + 3, city2_coords[0] + 12, city2, 
-                color=color, fontsize=10, transform=ccrs.Geodetic())
-        
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        plt.close()
-        return True
+if __name__ == "__main__":
+    db = DB_Map(DATABASE)

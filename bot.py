@@ -1,86 +1,107 @@
 import telebot
 from config import *
 from logic import *
+from datetime import datetime
+import time
 
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    bot.send_message(message.chat.id, "Привет! Я бот, который может показывать города на карте. Напиши /help для списка команд.")
+    start_text = """
+Привет! Я бот для работы с городами на карте.
+
+Основные команды:
+/country_cities [страна] - города страны
+/density_cities [мин_плотность] - города с плотностью выше указанной
+/city_info [город] - информация о городе
+/time_info [город] - местное время города
+/help - все команды
+"""
+    bot.send_message(message.chat.id, start_text)
 
 @bot.message_handler(commands=['help'])
 def handle_help(message):
     help_text = """
-Доступные команды:
-/show_city [город] [цвет] - показать город на карте (цвет необязателен)
-/remember_city [город] - сохранить город
-/show_my_cities [цвет] - показать все сохраненные города (цвет необязателен)
-/distance [город1] [город2] [цвет] - показать расстояние между городами (цвет необязателен)
+/country_cities [страна] - города страны
+/density_cities [плотность] - города с плотностью выше
+/city_info [город] - подробная информация
+/time_info [город] - местное время
 
-Доступные цвета: red, blue, green, yellow, purple, orange, black
+/show_city [город] - показать город
+/remember_city [город] - сохранить город
+/show_my_cities - показать сохраненные города
 """
     bot.send_message(message.chat.id, help_text)
 
-@bot.message_handler(commands=['show_city'])
-def handle_show_city(message):
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.send_message(message.chat.id, "Использование: /show_city [город] [цвет]")
-        return
-    
-    city_name = parts[1]
-    color = parts[2] if len(parts) > 2 else 'red' 
-    
-    user_id = message.chat.id
-    manager.create_graph(f'{user_id}.png', [city_name], color=color)
-    with open(f'{user_id}.png', 'rb') as map_file:
-        bot.send_photo(user_id, map_file)
+@bot.message_handler(commands=['country_cities'])
+def handle_country_cities(message):
+    try:
+        country = message.text.split()[1]
+        cities = manager.get_country_cities(country)
+        
+        if cities:
+            manager.create_graph(f'{message.chat.id}_country.png', cities)
+            with open(f'{message.chat.id}_country.png', 'rb') as f:
+                bot.send_photo(message.chat.id, f)
+            bot.send_message(message.chat.id, f"Города страны {country}: {', '.join(cities)}")
+        else:
+            bot.send_message(message.chat.id, "Города не найдены")
+    except IndexError:
+        bot.send_message(message.chat.id, "Укажите страну: /country_cities [страна]")
 
-@bot.message_handler(commands=['remember_city'])
-def handle_remember_city(message):
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.send_message(message.chat.id, "Использование: /remember_city [город]")
-        return
-    
-    user_id = message.chat.id
-    city_name = parts[1]
-    if manager.add_city(user_id, city_name):
-        bot.send_message(message.chat.id, f'Город {city_name} успешно сохранен!')
-    else:
-        bot.send_message(message.chat.id, 'Такого города я не знаю. Убедись, что он написан на английском!')
+@bot.message_handler(commands=['density_cities'])
+def handle_density_cities(message):
+    try:
+        min_density = float(message.text.split()[1])
+        cities = manager.get_cities_by_density(min_density)
+        
+        if cities:
+            manager.create_graph(f'{message.chat.id}_density.png', cities)
+            with open(f'{message.chat.id}_density.png', 'rb') as f:
+                bot.send_photo(message.chat.id, f)
+            bot.send_message(message.chat.id, f"Города с плотностью > {min_density}: {', '.join(cities[:10])}" + 
+                           ("..." if len(cities) > 10 else ""))
+        else:
+            bot.send_message(message.chat.id, "Города не найдены")
+    except (IndexError, ValueError):
+        bot.send_message(message.chat.id, "Укажите минимальную плотность: /density_cities [число]")
 
-@bot.message_handler(commands=['show_my_cities'])
-def handle_show_visited_cities(message):
-    parts = message.text.split()
-    color = parts[1] if len(parts) > 1 else 'blue'  
-    
-    cities = manager.select_cities(message.chat.id)
-    if cities:
-        manager.create_graph(f'{message.chat.id}_cities.png', cities, color=color)
-        with open(f'{message.chat.id}_cities.png', 'rb') as map_file:
-            bot.send_photo(message.chat.id, map_file)
-    else:
-        bot.send_message(message.chat.id, "У вас пока нет сохраненных городов.")
+@bot.message_handler(commands=['city_info'])
+def handle_city_info(message):
+    try:
+        city = message.text.split()[1]
+        info = manager.get_city_info(city)
+        
+        if info:
+            response = (f"Город: {city}\n"
+                      f"Страна: {info['country']}\n"
+                      f"Население: {info['population']:,}\n"
+                      f"Плотность: {info['density']} чел/км²\n"
+                      f"Часовой пояс: UTC{info['timezone']}")
+            bot.send_message(message.chat.id, response)
+        else:
+            bot.send_message(message.chat.id, "Город не найден")
+    except IndexError:
+        bot.send_message(message.chat.id, "Укажите город: /city_info [город]")
 
-@bot.message_handler(commands=['distance'])
-def handle_distance(message):
-    parts = message.text.split()
-    if len(parts) < 3:
-        bot.send_message(message.chat.id, "Использование: /distance [город1] [город2] [цвет]")
-        return
-    
-    city1 = parts[1]
-    city2 = parts[2]
-    color = parts[3] if len(parts) > 3 else 'green' 
-    
-    user_id = message.chat.id
-    if manager.draw_distance(city1, city2, f'{user_id}_distance.png', color):
-        with open(f'{user_id}_distance.png', 'rb') as map_file:
-            bot.send_photo(user_id, map_file)
-    else:
-        bot.send_message(message.chat.id, "Один из городов не найден. Проверьте названия.")
+@bot.message_handler(commands=['time_info'])
+def handle_time_info(message):
+    try:
+        city = message.text.split()[1]
+        timezone = manager.get_city_timezone(city)
+        
+        if timezone:
+            utc_offset = float(timezone)
+            local_time = datetime.utcnow().timestamp() + utc_offset * 3600
+            time_str = time.strftime("%H:%M:%S", time.gmtime(local_time))
+            bot.send_message(message.chat.id, f"В {city} сейчас: {time_str} (UTC{timezone})")
+        else:
+            bot.send_message(message.chat.id, "Город не найден")
+    except IndexError:
+        bot.send_message(message.chat.id, "Укажите город: /time_info [город]")
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     manager = DB_Map(DATABASE)
     bot.polling()
